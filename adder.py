@@ -4,9 +4,8 @@ from yosym import Simulator, clock, rising_edge
 import random
 
 class Adder(Elaboratable):
-    def __init__(self, width, domain='comb', interface=None):
+    def __init__(self, width, domain='comb'):
         self.width = width
-        self.interface = interface
         self.a = Signal(width)
         self.b = Signal(width)
         self.r = Signal(width + 1)
@@ -17,7 +16,6 @@ class Adder(Elaboratable):
         m.domain[self.d] += self.r.eq(self.a + self.b)
         return m
 
-        
 def coroutine(dut):
     yield from rising_edge(dut.clk)
     dut.rst.value = 1
