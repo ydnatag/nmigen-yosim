@@ -3,6 +3,7 @@ from nmigen.cli import main
 from nmigen.back import rtlil
 from nmigen.hdl.rec import Direction
 import subprocess
+import time
 
 class Adder(Elaboratable):
     def __init__(self, width, domain='comb', interface=None):
@@ -60,7 +61,6 @@ if __name__ == '__main__':
             self.a = Signal(4)
         def __str__(self):
             return str(self.rst.value)
-            
 
     def rising_edge(s):
         prev = s.value
@@ -72,35 +72,42 @@ if __name__ == '__main__':
 
     def clock(s):
         while True:
-            s.value = (s.value + 1) % 2
+            s.value = clk = (s.value + 1) % 2
             yield
             
     def simple_scheduller(coros):
+        loop = 0
+        start = time.time()
         try:
             while True:
                 for coro in coros:
                     next(coro)
                 sim.delta()
+                loop += 1
         except StopIteration:
+            elapsed = time.time() - start
+            print(f'loops={loop} elapsed={elapsed}')
             return
             
 
     dut = Dut()
 
     def coroutine():
+        yield from rising_edge(dut.clk)
         dut.rst.value = 1
-        yield rising_edge(dut.clk)
+        yield from rising_edge(dut.clk)
         dut.rst.value = 0
-        yield rising_edge(dut.clk)
+        yield from rising_edge(dut.clk)
 
-        for _ in range(20):
+        for _ in range(1000):
             dut.a.value = a = random.randint(0, 255)
             dut.b.value = b = random.randint(0, 255)
-            yield rising_edge(dut.clk)
-            yield rising_edge(dut.clk)
-            yield rising_edge(dut.clk)
-            r = dut.r.value
-            print(f'{a} + {b} = {r}')
+
+            yield from rising_edge(dut.clk)
+            yield from rising_edge(dut.clk)
+
+            assert dut.a.value + dut.b.value == dut.r.value
+
 
     clock_coro = clock(dut.clk)
     main_coro = coroutine()
