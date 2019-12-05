@@ -2,6 +2,9 @@ from nmigen import *
 import subprocess
 from yosym import Simulator, clock, rising_edge
 import random
+import time
+
+
 
 class Adder(Elaboratable):
     def __init__(self, width, domain='comb'):
@@ -16,27 +19,44 @@ class Adder(Elaboratable):
         m.domain[self.d] += self.r.eq(self.a + self.b)
         return m
 
-def coroutine(dut):
-    yield from rising_edge(dut.clk)
-    dut.rst.value = 1
-    yield from rising_edge(dut.clk)
-    dut.rst.value = 0
-    yield from rising_edge(dut.clk)
+PERIOD = 10
+def reset_coroutine(rst, clk):
+    yield from rising_edge(clk)
+    assert sim.sim_time == PERIOD
 
-    for _ in range(1000):
-        dut.a.value = a = random.randint(0, 255)
-        dut.b.value = b = random.randint(0, 255)
+    yield from rising_edge(clk)
+    assert sim.sim_time == 2 * PERIOD
+    rst.value = 0
+
+def main_coroutine(sim, dut):
+    yield from reset_coroutine(dut.rst, dut.clk)
+    # coro = sim.fork(reset_coroutine(dut.rst, dut.clk))
+    # yield from sim.join(coro) # Testing coroutine join
+
+    for i in range(1000):
+        dut.a.value = random.randint(0, 255)
+        dut.b.value = random.randint(0, 255)
 
         yield from rising_edge(dut.clk)
+        assert sim.sim_time == 3 * PERIOD + 2 * PERIOD * i
+
         yield from rising_edge(dut.clk)
+        assert sim.sim_time == 3 * PERIOD + i * 2 * PERIOD + PERIOD
 
         assert dut.a.value + dut.b.value == dut.r.value
+
 
 if __name__ == '__main__':
     m = Adder(10, 'sync')
     ports = [m.a, m.b, m.r]
-    
     with Simulator(m, platform=None, ports=ports) as (sim, dut):
-        clock_coro = clock(dut.clk)
-        main_coro = coroutine(dut)
-        sim.run([clock_coro, main_coro])
+        start = time.time()
+        clock_coro = clock(dut.clk, PERIOD)
+        main_coro = main_coroutine(sim, dut)
+        sim.run([main_coro, clock_coro])
+        elapsed = time.time() - start
+
+        print('\nResults:')
+        print(f'sim time: {sim.sim_time}')
+        print(f'real time: {elapsed}')
+        print(f'simtime / realtime: {sim.sim_time / elapsed}')
