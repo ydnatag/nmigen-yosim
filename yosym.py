@@ -33,6 +33,7 @@ class TRIGGERS:
     OTHER = 0
     TIMER = 1
     EDGE = 2
+    R_EDGE = 2
 
 class Simulator:
     def __init__(self, design, platform=None, ports=None):
@@ -70,7 +71,7 @@ class Simulator:
         return self.sim.get_sim_time()
 
     def fork(self, coro):
-        self.child_coros.append(coro)
+        self.sim.fork(coro)
         return coro
 
     def join(self, coro):
@@ -84,33 +85,19 @@ class Simulator:
         pass
 
 def edge(s):
-    yield TRIGGERS.EDGE, s.id
+    return TRIGGERS.EDGE, s.id
 
 def falling_edge(s):
-    prev = s.value
-    while True:
-        yield TRIGGERS.EDGE, s.id
-        if s.value == 0 and prev == 1:
-            return
-        prev = s.value
+    return TRIGGERS.F_EDGE, s.id
 
 def rising_edge(s):
-    prev = s.value
-    while True:
-        yield TRIGGERS.EDGE, s.id
-        if s.value == 1 and prev == 0:
-            print(f'@ {s.sim.get_sim_time()} ps: rising_edge({s.name})')
-            return
-        prev = s.value
+    return TRIGGERS.R_EDGE, s.id
 
 def timer(time):
     return TRIGGERS.TIMER, time
 
 def clock(clk, period=10):
-    print(period)
     period_2 = int(period / 2)
     while True:
         yield timer(period_2)
-        n = (clk.value + 1) % 2
-        print(f'@ {clk.sim.get_sim_time()} ps: clk <= {n}')
-        clk.value = n
+        clk.value = (clk.value + 1) % 2

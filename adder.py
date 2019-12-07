@@ -19,21 +19,25 @@ class Adder(Elaboratable):
 
 PERIOD = 10000
 def reset_coroutine(rst, clk):
-    yield from rising_edge(clk)
+    yield rising_edge(clk)
     rst.value = 1
-    yield from rising_edge(clk)
+    yield rising_edge(clk)
     rst.value = 0
+
+def print_on_rising_edge(clk):
+    while True:
+        yield rising_edge(clk)
 
 def main_coroutine(sim, dut):
     yield from reset_coroutine(dut.rst, dut.clk)
-    # coro = sim.fork(reset_coroutine(dut.rst, dut.clk))
+    coro = sim.fork(print_on_rising_edge(dut.clk))
     # yield from sim.join(coro) # Testing coroutine join
-    for i in range(10):
+    for i in range(1000):
         dut.a.value = random.randint(0, 255)
         dut.b.value = random.randint(0, 255)
-        yield from rising_edge(dut.clk)
-        yield from rising_edge(dut.clk)
-        print(f'@ {sim.sim_time} ps: {dut.a.value} + {dut.b.value} == {dut.r.value}')
+        yield rising_edge(dut.clk)
+        yield rising_edge(dut.clk)
+        #print(f'@ {sim.sim_time} ps: {dut.a.value} + {dut.b.value} == {dut.r.value}')
         assert dut.a.value + dut.b.value == dut.r.value
 
 if __name__ == '__main__':

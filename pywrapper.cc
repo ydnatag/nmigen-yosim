@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include "adder.cc"
 
-enum TRIGGERS {OTHER=0, TIMER, EDGE};
+enum TRIGGERS {OTHER=0, TIMER, EDGE, R_EDGE, F_EDGE};
 
 template <size_t Bits> static void set_next_value(void *signal, uint32_t v);
 template <size_t Bits> static uint32_t get_current_value(void *signal);
@@ -52,23 +52,60 @@ bool edge_condition(void * data) {
     return false;
 }
 
+bool redge_condition(void * data) {
+    signal_status_t * p = (signal_status_t*) data;
+    uint32_t current = sig_handler[p->signal].getter(sig_handler[p->signal].signal);
+    if (p->prev == 0 &&  current == 1) {
+        p->prev = current;
+        return true;
+    }
+    p->prev = current;
+    return false;
+}
+
+bool fedge_condition(void * data) {
+    signal_status_t * p = (signal_status_t*) data;
+    uint32_t current = sig_handler[p->signal].getter(sig_handler[p->signal].signal);
+    if (p->prev == 1 &&  current == 0) {
+        p->prev = current;
+        return true;
+    }
+    p->prev = current;
+    return false;
+}
+
 struct task_handler_t {
     PyObject *coro;
     bool (*condition)(void *);
     void * data;
+    signal_status_t * p;
     void add_condition(long t, long d) {
-        if (condition) free(data);
+        if (data) {free(data); data = NULL;}
         switch (t) {
             case TIMER:
                 data = new long{sim_time + d};
                 condition = timer_condition;
                 break;
             case EDGE:
-                auto p = new signal_status_t;
+                p =  new signal_status_t;
                 data = p;
                 p->signal = d;
                 p->prev = sig_handler[d].getter(sig_handler[d].signal);
                 condition = edge_condition;
+                break;
+            case R_EDGE:
+                p =  new signal_status_t;
+                data = p;
+                p->signal = d;
+                p->prev = sig_handler[d].getter(sig_handler[d].signal);
+                condition = redge_condition;
+                break;
+            case F_EDGE:
+                p =  new signal_status_t;
+                data = p;
+                p->signal = d;
+                p->prev = sig_handler[d].getter(sig_handler[d].signal);
+                condition = fedge_condition;
                 break;
         }
     }
@@ -131,6 +168,27 @@ static PyObject* add_task(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject* fork(PyObject *self, PyObject *args) {
+    PyObject * coro;
+    PyArg_ParseTuple(args,"O", &coro);
+
+    auto ret = PyObject_CallMethod(coro, "__next__", "");
+    if (PyErr_ExceptionMatches(PyExc_StopIteration)) {
+        PyErr_Clear();
+        Py_RETURN_NONE;
+    }
+    if (PyErr_Occurred()) Py_RETURN_NONE;
+
+    auto trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
+    auto data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
+
+    task_handler_t task = task_handler_t{coro, NULL, NULL};
+
+    task.add_condition(trigger, data);
+    forked_tasks.push_back(task);
+    Py_RETURN_NONE;
+}
+
 static PyObject* scheduller(PyObject *self, PyObject *args) {
     PyObject *ret, *error;
     long trigger, data;
@@ -149,6 +207,27 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
                 }
                 it++;
             }
+            
+            if (forked_tasks.size() != 0) {
+                for (auto it=forked_tasks.begin(); it != forked_tasks.end();) {
+                    if (not it->condition or it->condition(it->data)) {
+                        ret = PyObject_CallMethod(it->coro, "__next__", "");
+                        if (PyErr_ExceptionMatches(PyExc_StopIteration)) {
+                            if (it->data) {free(it->data); it->data = NULL;}
+                            forked_tasks.erase(it);
+                            PyErr_Clear();
+                        }
+                        error = PyErr_Occurred();
+                        if (error) Py_RETURN_NONE;
+                        trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
+                        data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
+                        it->add_condition(trigger, data);
+                        it++;
+                    }
+                    else it++;
+                }
+            }
+
             top.eval();
         } while(top.commit());
         sim_time++;
@@ -169,6 +248,7 @@ static PyMethodDef simulator_methods[] = {
     {"step", pystep, METH_NOARGS, "time step"},
 
     // Scheduller
+    {"fork", fork, METH_VARARGS, "add task to scheduller"},
     {"add_task", add_task, METH_VARARGS, "add task to scheduller"},
     {"scheduller", scheduller, METH_NOARGS, "add task to scheduller"},
 
