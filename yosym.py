@@ -2,11 +2,13 @@ from nmigen import Fragment
 from nmigen.back import rtlil, verilog
 import importlib
 import subprocess
+import sys
 
 class Signal():
-    def __init__(self, simulation, signal_id):
+    def __init__(self, simulation, signal_id, name):
         self.sim = simulation
         self.id = signal_id
+        self.name = name
 
     @property
     def value(self):
@@ -25,9 +27,9 @@ class Dut:
         self.sim.n_of_signals()
         for i in range(self.sim.n_of_signals()):
             name = self.sim.get_signal_name(i)
-            setattr(self, name, Signal(self.sim, i))
+            setattr(self, name, Signal(self.sim, i, name))
 
-class Triggers:
+class TRIGGERS:
     OTHER = 0
     TIMER = 1
     EDGE = 2
@@ -48,32 +50,20 @@ class Simulator:
         import simulation as sim
         self.sim = sim
         self.dut = Dut(sim)
-        self.main_coros = []
-        self.child_coros = []
 
     def build(self):
         subprocess.run('make')
 
-    def run(self, main_coros):
-        loops = 0
-        self.child_coros = []
-        self.main_coros = list(main_coros)
-        while True:
-            for coro in self.main_coros:
-                try:
-                    t_type, aux = next(coro)
-                    self.sim.commit_trigger(t_type, aux)
-                except StopIteration:
-                    return loops
-
-            # Child coroutines can finish without finishing the simulation
-            for coro in self.child_coros:
-                try:
-                    next(coro)
-                except StopIteration:
-                    self.child_coros.remove(coro)
-            self.sim.run_until_trigger()
-            loops += 1
+    def run(self, coros):
+        for coro in coros:
+            self.sim.add_task(coro)
+        try:
+            try:
+                self.sim.scheduller()
+            except Exception as e:
+                raise e.__cause__ from None
+        except StopIteration:
+            pass
 
     @property
     def sim_time(self):
@@ -94,33 +84,33 @@ class Simulator:
         pass
 
 def edge(s):
-    prev = s.value
-    while s.value == prev:
-        yield
+    yield TRIGGERS.EDGE, s.id
 
 def falling_edge(s):
     prev = s.value
     while True:
+        yield TRIGGERS.EDGE, s.id
         if s.value == 0 and prev == 1:
             return
         prev = s.value
-        yield Triggers.EDGE, s.id
 
 def rising_edge(s):
     prev = s.value
     while True:
+        yield TRIGGERS.EDGE, s.id
         if s.value == 1 and prev == 0:
-            # print('re', s.sim.get_sim_time())
+            print(f'@ {s.sim.get_sim_time()} ps: rising_edge({s.name})')
             return
         prev = s.value
-        yield Triggers.EDGE, s.id
 
 def timer(time):
-    yield Triggers.TIMER, time
+    return TRIGGERS.TIMER, time
 
 def clock(clk, period=10):
+    print(period)
     period_2 = int(period / 2)
     while True:
-        yield from timer(period_2)
-        clk.value = (clk.value + 1) % 2
-        # print('clock', clk.sim.get_sim_time(), clk.value)
+        yield timer(period_2)
+        n = (clk.value + 1) % 2
+        print(f'@ {clk.sim.get_sim_time()} ps: clk <= {n}')
+        clk.value = n
