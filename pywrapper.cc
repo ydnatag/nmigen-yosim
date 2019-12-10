@@ -6,8 +6,8 @@
 
 enum TRIGGERS {OTHER=0, TIMER, EDGE, R_EDGE, F_EDGE};
 
-template <size_t Bits> static void set_next_value(void *signal, uint32_t v);
-template <size_t Bits> static uint32_t get_current_value(void *signal);
+template <size_t Bits> static void set_next_value(void *signal, PyObject *v);
+template <size_t Bits> static PyObject * get_current_value(void *signal);
 
 std::vector<struct task_handler_t> main_tasks;
 std::vector<struct task_handler_t> forked_tasks;
@@ -20,42 +20,54 @@ struct signal_handler_t {
     const char * name;
     void * signal;
     int width;
-    void (*setter) (void *signal, uint32_t v);
-    uint32_t (*getter) (void *signal);
+    void (*setter) (void *signal, PyObject *v);
+    PyObject * (*getter) (void *signal);
+};
+
+struct signal_status_t {
+    uint32_t signal;
+    PyLongObject * prev;
 };
 
 struct signal_handler_t sig_handler[] = {
     {.id = 0, .name = "rst", .width = 1,  .signal = (void*) &top.p_rst, .setter = set_next_value<1>,  .getter = get_current_value<1> },
     {.id = 1, .name = "clk", .width = 1,  .signal = (void*) &top.p_clk, .setter = set_next_value<1>,  .getter = get_current_value<1> },
-    {.id = 2, .name = "r",   .width = 11, .signal = (void*) &top.p_r,   .setter = set_next_value<11>, .getter = get_current_value<11>},
-    {.id = 3, .name = "b",   .width = 10, .signal = (void*) &top.p_b,   .setter = set_next_value<10>, .getter = get_current_value<10>},
-    {.id = 4, .name = "a",   .width = 10, .signal = (void*) &top.p_a,   .setter = set_next_value<10>, .getter = get_current_value<10>},
+    {.id = 2, .name = "r",   .width = 65, .signal = (void*) &top.p_r,   .setter = set_next_value<65>, .getter = get_current_value<65>},
+    {.id = 3, .name = "b",   .width = 64, .signal = (void*) &top.p_b,   .setter = set_next_value<64>, .getter = get_current_value<64>},
+    {.id = 4, .name = "a",   .width = 64, .signal = (void*) &top.p_a,   .setter = set_next_value<64>, .getter = get_current_value<64>},
 };
 
-bool timer_condition(void * data) {
+static bool timer_condition(void * data) {
     return (*(long *) data) == sim_time;
 }
 
+static bool PyLongEquals(PyLongObject *a, PyLongObject *b){
+    auto size_a = Py_SIZE(a);
+    auto size_b = Py_SIZE(b);
 
-struct signal_status_t {
-    uint32_t signal;
-    uint32_t prev;
-};
+    if (size_a != size_b) return false;
 
-bool edge_condition(void * data) {
+    if(size_a == 0) return true;
+    for (unsigned int i=0; i<size_a; i++) {
+        if (a->ob_digit[i] != b->ob_digit[i]) return false;
+    }
+    return true;
+}
+
+static bool edge_condition(void * data) {
     signal_status_t * p = (signal_status_t*) data;
-    uint32_t current = sig_handler[p->signal].getter(sig_handler[p->signal].signal);
-    if (p->prev != current) {
+    PyLongObject * current = (PyLongObject *) sig_handler[p->signal].getter(sig_handler[p->signal].signal);
+    if (not PyLongEquals(p->prev, current)) {
         p->prev = current;
         return true;
     }
     return false;
 }
 
-bool redge_condition(void * data) {
+static bool redge_condition(void * data) {
     signal_status_t * p = (signal_status_t*) data;
-    uint32_t current = sig_handler[p->signal].getter(sig_handler[p->signal].signal);
-    if (p->prev == 0 &&  current == 1) {
+    PyLongObject * current = (PyLongObject *) sig_handler[p->signal].getter(sig_handler[p->signal].signal);
+    if (Py_SIZE(p->prev) == 0 &&  Py_SIZE(current)) {
         p->prev = current;
         return true;
     }
@@ -63,10 +75,10 @@ bool redge_condition(void * data) {
     return false;
 }
 
-bool fedge_condition(void * data) {
+static bool fedge_condition(void * data) {
     signal_status_t * p = (signal_status_t*) data;
-    uint32_t current = sig_handler[p->signal].getter(sig_handler[p->signal].signal);
-    if (p->prev == 1 &&  current == 0) {
+    PyLongObject * current = (PyLongObject *) sig_handler[p->signal].getter(sig_handler[p->signal].signal);
+    if (Py_SIZE(p->prev) &&  Py_SIZE(current) == 0) {
         p->prev = current;
         return true;
     }
@@ -90,21 +102,21 @@ struct task_handler_t {
                 p =  new signal_status_t;
                 data = p;
                 p->signal = d;
-                p->prev = sig_handler[d].getter(sig_handler[d].signal);
+                p->prev = (PyLongObject*) sig_handler[d].getter(sig_handler[d].signal);
                 condition = edge_condition;
                 break;
             case R_EDGE:
                 p =  new signal_status_t;
                 data = p;
                 p->signal = d;
-                p->prev = sig_handler[d].getter(sig_handler[d].signal);
+                p->prev =  (PyLongObject*) sig_handler[d].getter(sig_handler[d].signal);
                 condition = redge_condition;
                 break;
             case F_EDGE:
                 p =  new signal_status_t;
                 data = p;
                 p->signal = d;
-                p->prev = sig_handler[d].getter(sig_handler[d].signal);
+                p->prev =  (PyLongObject*) sig_handler[d].getter(sig_handler[d].signal);
                 condition = fedge_condition;
                 break;
         }
@@ -112,13 +124,66 @@ struct task_handler_t {
 };
 
 template <size_t Bits>
-static void set_next_value(void *signal, uint32_t v) {
-    ((wire<Bits>*)signal)->next = value<Bits>{v};
+static void set_next_value(void *signal, PyObject *v) {
+    PyLongObject * l = (PyLongObject*) v;
+    value<Bits> *p = &((wire<Bits>*) signal)->next;
+
+    const uint32_t chunks = (Bits + 32 - 1) / 32;
+    long ob_size = Py_SIZE(l);
+    uint64_t data = 0;
+    int b = 0;
+
+    unsigned int i = 0, j = 0;
+    for (unsigned int i = 0; i < chunks; i++) p->data[i] = 0;
+    if (ob_size != 0) {
+        for (unsigned int i = 0; i < ob_size; i++) {
+            data |= (((uint64_t) (l->ob_digit[i] & 0x3fffffff)) << b);
+            b += 30;
+            while(b >= 32) {
+                p->data[j] = data & 0xffffffff;
+                data = data >> 32;
+                b -= 32;
+                j++;
+            }
+        }
+        if (b != 0) p->data[j] = data & 0xffffffff;;
+    }
+    else for (unsigned int i = 0; i < p->chunks; i++) p->data[i] = 0;
 }
 
 template <size_t Bits>
-static uint32_t get_current_value(void *signal) {
-    return ((wire<Bits>*)signal)->curr.data[0];
+static PyObject * get_current_value(void *signal) {
+    value<Bits> *p = &((wire<Bits>*) signal)->curr;
+    uint64_t data = 0;
+    uint32_t b = 0;
+    const uint32_t chunks = (Bits + 32 - 1) / 32;
+    const uint32_t max_ob_size = (Bits + 30 - 1) / 30 + 1;
+    uint32_t  ob_size = 0;
+    unsigned int j = 0;
+    uint32_t ob_digit[max_ob_size] = {};
+
+    for (unsigned int i = 0; i < max_ob_size; i++) {
+        ob_digit[i] = 0;
+    }
+    
+    for (unsigned int i = 0; i < chunks; i++) {
+        data |= ((uint64_t) p->data[i]) << b;
+        b += 32;
+        while(b >= 30) {
+            ob_digit[j] = data & 0x3fffffff;
+            data = data >> 30;
+            b -= 30;
+            j++;
+        }
+    }
+    if (b != 0) ob_digit[j] = data;
+    ob_size = max_ob_size -1;
+    while(ob_size > 0 && ob_digit[ob_size] == 0) ob_size--;
+    if (ob_size == 0 && ob_digit[0] == 0) return PyLong_FromLong(0L);
+
+    PyLongObject * l = _PyLong_New(ob_size+ 1);
+    for (unsigned int i = 0; i <= ob_size; i++) l->ob_digit[i] = ob_digit[i];
+    return (PyObject *) l;
 }
 
 static PyObject* get_signal_name(PyObject *self, PyObject *args) {
@@ -127,10 +192,16 @@ static PyObject* get_signal_name(PyObject *self, PyObject *args) {
     return Py_BuildValue("s", sig_handler[id].name);
 }
 
+static PyObject* get_signal_width(PyObject *self, PyObject *args) {
+    uint32_t id;
+    PyArg_ParseTuple(args,"i", &id);
+    return Py_BuildValue("s", sig_handler[id].width);
+}
+
 static PyObject* set_by_id(PyObject *self, PyObject *args) {
     uint32_t id;
-    uint32_t v;
-    PyArg_ParseTuple(args,"ii", &id, &v);
+    PyObject * v;
+    PyArg_ParseTuple(args,"iO", &id, &v);
     sig_handler[id].setter(sig_handler[id].signal, v);
     Py_RETURN_NONE;
 }
@@ -145,7 +216,7 @@ static void step() {
 static PyObject* get_by_id(PyObject *self, PyObject *args) {
     uint32_t id;
     PyArg_ParseTuple(args,"i", &id);
-    return Py_BuildValue("i", sig_handler[id].getter(sig_handler[id].signal));
+    return sig_handler[id].getter(sig_handler[id].signal);
 }
 
 static PyObject* pystep(PyObject *self, PyObject *args) {
@@ -233,7 +304,6 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
         sim_time++;
         if (PyErr_CheckSignals()) Py_RETURN_NONE;
     }
-    std::cout << "leaving scheduller" << std::endl;
     Py_RETURN_NONE;
 }
 
@@ -258,7 +328,7 @@ static PyMethodDef simulator_methods[] = {
     {NULL, NULL, 0, NULL}
 };
 
-static struct PyModuleDef hello_definition = { 
+static struct PyModuleDef simulation_definition = { 
     PyModuleDef_HEAD_INIT,
     "simulation",
     "yosys simulation in python",
@@ -268,5 +338,5 @@ static struct PyModuleDef hello_definition = {
 
 PyMODINIT_FUNC PyInit_simulation(void) {
     Py_Initialize();
-    return PyModule_Create(&hello_definition);
-    }
+    return PyModule_Create(&simulation_definition);
+}

@@ -33,7 +33,8 @@ class TRIGGERS:
     OTHER = 0
     TIMER = 1
     EDGE = 2
-    R_EDGE = 2
+    R_EDGE = 3
+    F_EDGE = 4
 
 class Simulator:
     def __init__(self, design, platform=None, ports=None):
@@ -53,7 +54,7 @@ class Simulator:
         self.dut = Dut(sim)
 
     def build(self):
-        subprocess.run('make')
+        subprocess.run('make').check_returncode()
 
     def run(self, coros):
         for coro in coros:
