@@ -9,9 +9,14 @@ The API is inspired by COCOTB
 # How to use it?
 
 ```
-git submodule init && git submodule update
 python3 adder.py
 ```
+
+# Requirements
+
+* yosys with cxxtrl backend
+* clang++
+* nMigen
 
 # Acknowledgements
 
