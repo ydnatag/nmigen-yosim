@@ -27,7 +27,7 @@ def reset_coroutine(rst, clk):
 
 def main_coroutine(sim, dut):
     yield from reset_coroutine(dut.rst, dut.clk)
-    for j in range(8, 64):
+    for j in range(8, 65):
         print(f'width <= {j}')
         for i in range(100):
             a = random.randint(0, 2**j-1)
