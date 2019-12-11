@@ -1,5 +1,7 @@
 from nmigen import Fragment
+from nmigen._toolchain import require_tool
 from nmigen.back import rtlil, verilog
+import tempfile
 import importlib
 import subprocess
 import sys
@@ -41,20 +43,41 @@ class Simulator:
         fragment = Fragment.get(design, None)
         output = rtlil.convert(fragment, name='top', ports=ports)
 
-        with open('adder.il', 'w') as f:
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.il_file = self.tmp_dir.name + '/top.il'
+        self.cpp_file = self.tmp_dir.name + '/top.cc'
+        self.so_file = self.tmp_dir.name + '/simulation.so'
+        self.wrapper_file = './wrapper.cc'
+
+        with open(self.il_file, 'w') as f:
             f.write(output)
+
+        self.cxxrtl()
+        self.add_wrapper()
         self.build()
 
-        output = verilog.convert(fragment, name='top', ports=ports)
-        with open('top.v', 'w') as f:
-            f.write(output)
+        spec = importlib.util.spec_from_file_location("simulation", self.so_file)
+        self.sim = importlib.util.module_from_spec(spec)
+        self.dut = Dut(self.sim)
 
-        import simulation as sim
-        self.sim = sim
-        self.dut = Dut(sim)
+    def cxxrtl(self):
+        subprocess.run(f'yosys -q {self.il_file} -o {self.cpp_file}'.split(' ')
+                      ).check_returncode()
+
+    def add_wrapper(self):
+        with open(self.cpp_file, 'a') as cpp:
+            with open(self.wrapper_file, 'r') as w:
+                cpp.write(w.read())
 
     def build(self):
-        subprocess.run('make').check_returncode()
+        python_cflags = subprocess.check_output(['python3-config', '--includes'], encoding="utf-8")
+        print(python_cflags)
+        subprocess.run(['clang++',
+                        '-I/usr/local/share/yosys/include/backends/cxxrtl/',
+                        '-shared', '-fPIC', '-O3',
+                        *python_cflags.split(' '),
+                        '-o', f'{self.so_file}',
+                        f'{self.cpp_file}']).check_returncode()
 
     def run(self, coros):
         for coro in coros:
