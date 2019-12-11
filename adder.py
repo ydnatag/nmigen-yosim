@@ -25,15 +25,9 @@ def reset_coroutine(rst, clk):
     yield rising_edge(clk)
     rst.value = 0
 
-def print_on_rising_edge(clk):
-    while True:
-        yield rising_edge(clk)
-
 def main_coroutine(sim, dut):
     yield from reset_coroutine(dut.rst, dut.clk)
-    coro = sim.fork(print_on_rising_edge(dut.clk))
-    # yield from sim.join(coro) # Testing coroutine join
-    for j in range(2, 64):
+    for j in range(8, 64):
         print(f'width <= {j}')
         for i in range(100):
             a = random.randint(0, 2**j-1)
@@ -42,10 +36,10 @@ def main_coroutine(sim, dut):
             dut.b.value = b
             yield rising_edge(dut.clk)
             yield rising_edge(dut.clk)
+
             assert a == dut.a.value, f'{a} == {dut.a.value}'
             assert b == dut.b.value, f'{b} == {dut.b.value}'
-            #print(f'@ {sim.sim_time} ps: {dut.a.value} + {dut.b.value} == {dut.r.value}')
-            assert a + b == dut.r.value, f'{a} + {b} == {dut.r.value}'
+            assert a + b == dut.r.value, f'@{sim.sim_time} ps: {a} + {b} == {dut.r.value}'
 
 if __name__ == '__main__':
     m = Adder(64, 'sync')
@@ -54,7 +48,7 @@ if __name__ == '__main__':
         start = time.time()
         clock_coro = clock(dut.clk, PERIOD)
         main_coro = main_coroutine(sim, dut)
-        sim.run([main_coro, clock_coro])
+        sim.run([clock_coro, main_coro])
         elapsed = time.time() - start
 
     print('\nResults:')
