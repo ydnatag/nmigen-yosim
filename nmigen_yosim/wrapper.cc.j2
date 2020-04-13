@@ -247,7 +247,7 @@ static PyObject* get_signal_name(PyObject *self, PyObject *args) {
 static PyObject* get_signal_width(PyObject *self, PyObject *args) {
     uint32_t id;
     PyArg_ParseTuple(args,"i", &id);
-    return Py_BuildValue("s", handler_list[id].width);
+    return Py_BuildValue("i", handler_list[id].width);
 }
 
 static PyObject* set_by_id(PyObject *self, PyObject *args) {
@@ -376,6 +376,7 @@ static PyMethodDef simulator_methods[] = {
     {"get_signal_name", get_signal_name, METH_VARARGS, "set value by signal id"},
     {"set_by_id", set_by_id, METH_VARARGS, "set value by signal id"},
     {"get_by_id", get_by_id, METH_VARARGS, "get value by signal id"},
+    {"get_width_by_id", get_signal_width, METH_VARARGS, "get signal width by signal id"},
 
     // Time step
     {"step", pystep, METH_NOARGS, "time step"},

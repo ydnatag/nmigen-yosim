@@ -3,6 +3,7 @@ class Signal():
         self.sim = simulation
         self.id = signal_id
         self.name = name
+        self.width = self.sim.get_width_by_id(self.id)
 
     @property
     def value(self):
