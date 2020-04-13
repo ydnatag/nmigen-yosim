@@ -40,11 +40,14 @@ struct signal_status_t {
 };
 
 struct signal_handler_t handler_list[] = {
-    {.name = "rst", .width = 1,  .chunks = WIDTH_TO_CHUNKS(1),  .curr = top.p_rst.curr.data, .next = top.p_rst.next.data},
-    {.name = "clk", .width = 1,  .chunks = WIDTH_TO_CHUNKS(1),  .curr = top.p_clk.curr.data, .next = top.p_clk.next.data},
-    {.name = "r",   .width = 66, .chunks = WIDTH_TO_CHUNKS(66), .curr = top.p_r.curr.data,   .next = top.p_r.next.data},
-    {.name = "b",   .width = 65, .chunks = WIDTH_TO_CHUNKS(65), .curr = top.p_b.curr.data,   .next = top.p_b.next.data},
-    {.name = "a",   .width = 65, .chunks = WIDTH_TO_CHUNKS(65), .curr = top.p_a.curr.data,   .next = top.p_a.next.data},
+{% for wire in wires %}
+    {.name = "{{ wire.name }}",
+     .width = {{ wire.width }},
+     .chunks = WIDTH_TO_CHUNKS({{ wire.width }}),
+     .curr = {{ wire.cpath }}.curr.data,
+     .next = {{ wire.cpath }}.next.data
+    },
+{% endfor %}
 };
 
 static bool timer_trigger(void * data) {
@@ -52,10 +55,6 @@ static bool timer_trigger(void * data) {
         return true;
     }
     return false;
-}
-
-uint32_t n_of_chunks(uint32_t width) {
-    return (width + 32 - 1) / 32;
 }
 
 static void copy_chunks(uint32_t *orig, uint32_t *dest, uint32_t chunks) {
@@ -172,7 +171,7 @@ struct task_handler_t {
             case F_EDGE:
                 p = (signal_status_t*) data;
                 p->signal = value;
-                p->chunks = n_of_chunks(handler_list[value].width);
+                p->chunks = handler_list[value].chunks;
                 p->start_time = sim_time;
                 p->curr = handler_list[value].curr;
                 p->prev = new uint32_t[p->chunks];

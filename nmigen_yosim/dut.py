@@ -15,9 +15,28 @@ class Signal():
     def __str__(self):
         return str(self.value)
 
-class Dut:
+class Module():
+    def __init__(self, name):
+        self.name = name
+
+    def add_module(self, hierarchy):
+        if hierarchy:
+            module = hierarchy[0]
+            if not hasattr(self, module):
+                setattr(self, module, Module(module))
+            mod = self.add_module(hierarchy[1:]) if len(hierarchy) > 1 \
+                  else getattr(self, module)
+        else:
+            mod = self
+        return mod
+
+class Dut(Module):
     def __init__(self, simulation):
+        self.name = 'top'
         for i in range(simulation.n_of_signals()):
             name = simulation.get_signal_name(i)
-            setattr(self, name, Signal(simulation, i, name))
-
+            hierarchy = name.split('.')[1:]
+            signal = hierarchy[-1]
+            hierarchy = hierarchy[:-1]
+            mod = self.add_module(hierarchy)
+            setattr(mod, signal, Signal(simulation, i, name))

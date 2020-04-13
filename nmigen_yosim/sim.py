@@ -1,11 +1,14 @@
 from .dut import Dut
+from .gen import generate_wrapper
 import importlib
 from nmigen import *
 from nmigen._toolchain import require_tool
 from nmigen.back import rtlil, verilog
+import os
 import subprocess
 import sys
-import os
+import tempfile
+
 
 class Simulator:
     def __init__(self, design, platform=None, ports=None, debug=False):
@@ -18,7 +21,7 @@ class Simulator:
         self.so_file = self.tmp_dir.name + '/simulation.so'
 
         wrapper_path = os.path.dirname(os.path.realpath(__file__))
-        self.wrapper_file = wrapper_path + '/wrapper.cc'
+        self.wrapper_file = wrapper_path + '/wrapper.cc.j2'
         self.debug = debug
 
         with open(self.il_file, 'w') as f:
@@ -37,9 +40,12 @@ class Simulator:
                       ).check_returncode()
 
     def add_wrapper(self):
-        with open(self.cpp_file, 'a') as cpp:
-            with open(self.wrapper_file, 'r') as w:
-                cpp.write(w.read())
+        with open(self.wrapper_file) as f:
+            wrapper = f.read()
+        with open(self.cpp_file, 'r+') as f:
+            cpp = f.read()
+            wrapper = generate_wrapper(cpp=cpp, template=wrapper)
+            f.write(wrapper)
 
     def build(self):
         python_cflags = subprocess.check_output(['python3-config', '--includes'], encoding="utf-8")
