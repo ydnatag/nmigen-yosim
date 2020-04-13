@@ -63,6 +63,6 @@ if __name__ == '__main__':
         elapsed = time.time() - start
 
     print('\nResults:')
-    print(f'sim time: {sim.sim_time}')
-    print(f'real time: {elapsed}')
-    print(f'simtime / realtime: {sim.sim_time / elapsed}')
+    print(f'sim time: {sim.sim_time / 1000} ns')
+    print(f'real time: {elapsed} s')
+    print(f'simtime / realtime: {sim.sim_time / 1000 / elapsed} ns/s')
