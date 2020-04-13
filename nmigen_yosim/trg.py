@@ -23,9 +23,3 @@ def timer(time, units='ps'):
     if not mult:
         raise ValueError('Invalid unit')
     return TRIGGERS.TIMER, int(time * mult)
-
-def clock(clk, period=10, units='ps'):
-    period_2 = int(period / 2)
-    while True:
-        yield timer(period_2, units=units)
-        clk.value = (clk.value + 1) % 2
