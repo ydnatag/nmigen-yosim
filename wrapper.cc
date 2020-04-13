@@ -12,24 +12,23 @@ template <size_t Bits> static PyObject * get_current_value(void *signal);
 std::vector<struct task_handler_t> main_tasks;
 std::vector<struct task_handler_t> forked_tasks;
 
-#define DEBUG
 #ifdef DEBUG
     #define DEBUG_PRINT(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
 #else
     #define DEBUG_PRINT(...) do{} while( false )
 #endif
 
+#define WIDTH_TO_CHUNKS( x ) (( ( x ) + 32 - 1) / 32)
+
 cxxrtl_design::p_top top;
 uint32_t sim_time = 0;
 
 struct signal_handler_t {
-    int    id;
     const char * name;
-    void * signal;
-    int width;
+    uint32_t width;
+    uint32_t chunks;
     uint32_t *curr;
-    void (*set) (void *signal, PyObject *v);
-    PyObject * (*get) (void *signal);
+    uint32_t *next;
 };
 
 struct signal_status_t {
@@ -41,11 +40,11 @@ struct signal_status_t {
 };
 
 struct signal_handler_t handler_list[] = {
-    {.id = 0, .name = "rst", .width = 1,  .signal = (void*) &top.p_rst, .curr = top.p_rst.curr.data, .set = set_next_value<1>,  .get = get_current_value<1> },
-    {.id = 1, .name = "clk", .width = 1,  .signal = (void*) &top.p_clk, .curr = top.p_clk.curr.data, .set = set_next_value<1>,  .get = get_current_value<1> },
-    {.id = 2, .name = "r",   .width = 65, .signal = (void*) &top.p_r,   .curr = top.p_r.curr.data, .set = set_next_value<65>, .get = get_current_value<65>},
-    {.id = 3, .name = "b",   .width = 64, .signal = (void*) &top.p_b,   .curr = top.p_b.curr.data, .set = set_next_value<64>, .get = get_current_value<64>},
-    {.id = 4, .name = "a",   .width = 64, .signal = (void*) &top.p_a,   .curr = top.p_a.curr.data, .set = set_next_value<64>, .get = get_current_value<64>},
+    {.name = "rst", .width = 1,  .chunks = WIDTH_TO_CHUNKS(1),  .curr = top.p_rst.curr.data, .next = top.p_rst.next.data},
+    {.name = "clk", .width = 1,  .chunks = WIDTH_TO_CHUNKS(1),  .curr = top.p_clk.curr.data, .next = top.p_clk.next.data},
+    {.name = "r",   .width = 66, .chunks = WIDTH_TO_CHUNKS(66), .curr = top.p_r.curr.data,   .next = top.p_r.next.data},
+    {.name = "b",   .width = 65, .chunks = WIDTH_TO_CHUNKS(65), .curr = top.p_b.curr.data,   .next = top.p_b.next.data},
+    {.name = "a",   .width = 65, .chunks = WIDTH_TO_CHUNKS(65), .curr = top.p_a.curr.data,   .next = top.p_a.next.data},
 };
 
 static bool timer_trigger(void * data) {
@@ -178,67 +177,56 @@ struct task_handler_t {
                 p->curr = handler_list[value].curr;
                 p->prev = new uint32_t[p->chunks];
                 for (int i = 0; i < p->chunks; i++) p->prev[i] = p->curr[i];
-                DEBUG_PRINT("@%d: Trigger added\n", sim_time);
                 break;
         }
         trigger = TRIGGER_LIST[type];
     }
 };
 
-template <size_t Bits>
-static void set_next_value(void *signal, PyObject *v) {
+static void pylong_to_chunks(PyObject *v, uint32_t *data, uint32_t chunks) {
     PyLongObject * l = (PyLongObject*) v;
-    value<Bits> *p = &((wire<Bits>*) signal)->next;
-
-    const uint32_t chunks = (Bits + 32 - 1) / 32;
     long ob_size = Py_SIZE(l);
-    uint64_t data = 0;
-    int b = 0;
+    uint64_t buf = 0;
+    int buffered = 0;
 
     unsigned int i = 0, j = 0;
-    for (unsigned int i = 0; i < chunks; i++) p->data[i] = 0;
+    for (unsigned int i = 0; i < chunks; i++) data[i] = 0;
+
     if (ob_size != 0) {
         for (unsigned int i = 0; i < ob_size; i++) {
-            data |= (((uint64_t) (l->ob_digit[i] & 0x3fffffff)) << b);
-            b += 30;
-            while(b >= 32) {
-                p->data[j] = data & 0xffffffff;
-                data = data >> 32;
-                b -= 32;
-                j++;
+            buf |= (((uint64_t) (l->ob_digit[i] & 0x3fffffff)) << buffered);
+            buffered += 30;
+            while(buffered >= 32) {
+                data[j++] = buf & 0xffffffff;
+                buf = buf >> 32;
+                buffered -= 32;
             }
         }
-        if (b != 0) p->data[j] = data & 0xffffffff;;
+        if (buffered != 0) data[j] = buf & 0xffffffff;;
     }
-    else for (unsigned int i = 0; i < p->chunks; i++) p->data[i] = 0;
 }
 
-template <size_t Bits>
-static PyObject * get_current_value(void *signal) {
-    value<Bits> *p = &((wire<Bits>*) signal)->curr;
-    uint64_t data = 0;
-    uint32_t b = 0;
-    const uint32_t chunks = (Bits + 32 - 1) / 32;
-    const uint32_t max_ob_size = (Bits + 30 - 1) / 30 + 2;
-    uint32_t  ob_size = 0;
-    unsigned int j = 0;
-    uint32_t ob_digit[max_ob_size] = {};
+static PyObject * chunks_to_pylong(uint32_t *data, uint32_t chunks) {
+    const uint32_t max_ob_size = (chunks * 32 + 30 - 1) / 30 + 2;
+    uint64_t buf = 0;
+    uint32_t buffered = 0;
+    uint32_t ob_digit[max_ob_size];
+    uint32_t digits = 0;
+    uint32_t ob_size = max_ob_size - 1;
 
+    if (is_zero(data, chunks)) return PyLong_FromLong(0L);
+    for (unsigned int i = 0; i < max_ob_size; i++) ob_digit[i] = 0;
     for (unsigned int i = 0; i < chunks; i++) {
-        data |= ((uint64_t) p->data[i]) << b;
-        b += 32;
-        while(b >= 30) {
-            ob_digit[j] = data & 0x3fffffff;
-            data = data >> 30;
-            b -= 30;
-            j++;
+        buf |= ((uint64_t) data[i]) << buffered;
+        buffered += 32;
+        while(buffered >= 30) {
+            ob_digit[digits++] = buf & 0x3fffffff;
+            buf = buf >> 30;
+            buffered -= 30;
         }
     }
-    if (b != 0) ob_digit[j] = data;
-    ob_size = max_ob_size -1;
+    if (buffered != 0) ob_digit[digits++] = buf;
     while(ob_size > 0 && ob_digit[ob_size] == 0) ob_size--;
-    if (ob_size == 0 && ob_digit[0] == 0) return PyLong_FromLong(0L);
-
 
     PyLongObject * l = _PyLong_New(ob_size+ 1);
     for (unsigned int i = 0; i <= ob_size; i++) l->ob_digit[i] = ob_digit[i];
@@ -261,8 +249,14 @@ static PyObject* set_by_id(PyObject *self, PyObject *args) {
     uint32_t id;
     PyObject * v;
     PyArg_ParseTuple(args,"iO", &id, &v);
-    handler_list[id].set(handler_list[id].signal, v);
+    pylong_to_chunks(v, handler_list[id].next, handler_list[id].chunks);
     Py_RETURN_NONE;
+}
+
+static PyObject* get_by_id(PyObject *self, PyObject *args) {
+    uint32_t id;
+    PyArg_ParseTuple(args,"i", &id);
+    return chunks_to_pylong(handler_list[id].curr, handler_list[id].chunks);
 }
 
 static void step() {
@@ -270,12 +264,6 @@ static void step() {
 		top.eval();
 	} while (top.commit());
     sim_time++;
-}
-
-static PyObject* get_by_id(PyObject *self, PyObject *args) {
-    uint32_t id;
-    PyArg_ParseTuple(args,"i", &id);
-    return handler_list[id].get(handler_list[id].signal);
 }
 
 static PyObject* pystep(PyObject *self, PyObject *args) {
