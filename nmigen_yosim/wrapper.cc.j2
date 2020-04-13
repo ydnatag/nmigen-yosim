@@ -22,6 +22,7 @@ std::vector<struct task_handler_t> forked_tasks;
 
 cxxrtl_design::p_top top;
 uint32_t sim_time = 0;
+uint32_t sim_time_precision = 1;
 
 struct signal_handler_t {
     const char * name;
@@ -149,7 +150,7 @@ struct task_handler_t {
         data = NULL;
     }
 
-    void add_trigger(long trigger_type, long value) {
+    int add_trigger(long trigger_type, long value) {
         signal_status_t * p;
         uint32_t chunks;
 
@@ -164,6 +165,10 @@ struct task_handler_t {
         type = trigger_type;
         switch (type) {
             case TIMER:
+                if (value % sim_time_precision > 0) {
+                    PyErr_SetString(PyExc_ValueError, "Invalid time precision");
+                    return -1;
+                }
                 *((long*) data) = sim_time + value;
                 break;
             case EDGE:
@@ -179,6 +184,7 @@ struct task_handler_t {
                 break;
         }
         trigger = TRIGGER_LIST[type];
+        return 0;
     }
 };
 
@@ -262,7 +268,7 @@ static void step() {
 	do {
 		top.eval();
 	} while (top.commit());
-    sim_time++;
+    sim_time += sim_time_precision;
 }
 
 static PyObject* pystep(PyObject *self, PyObject *args) {
@@ -276,6 +282,17 @@ static PyObject* n_of_signals(PyObject *self, PyObject *args) {
 
 static PyObject* get_sim_time(PyObject *self, PyObject *args) {
     return Py_BuildValue("i", sim_time);
+}
+
+static PyObject* get_sim_time_precision(PyObject *self, PyObject *args) {
+    return Py_BuildValue("i", sim_time_precision);
+}
+
+static PyObject* set_sim_time_precision(PyObject *self, PyObject *args) {
+    uint32_t v;
+    PyArg_ParseTuple(args,"i", &v);
+    sim_time_precision = v;
+    Py_RETURN_NONE;
 }
 
 static PyObject* add_task(PyObject *self, PyObject *args) {
@@ -301,7 +318,7 @@ static PyObject* fork(PyObject *self, PyObject *args) {
 
     task_handler_t task = task_handler_t{coro, NULL, NULL};
 
-    task.add_trigger(trigger, data);
+    if (task.add_trigger(trigger, data) < 0) return NULL;
     forked_tasks.push_back(task);
     Py_RETURN_NONE;
 }
@@ -320,7 +337,7 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
                     if (error) Py_RETURN_NONE;
                     trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
                     data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
-                    it->add_trigger(trigger, data);
+                    if (it->add_trigger(trigger, data) < 0) return NULL;
                 }
                 it++;
             }
@@ -338,7 +355,7 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
                         if (error) Py_RETURN_NONE;
                         trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
                         data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
-                        it->add_trigger(trigger, data);
+                        if (it->add_trigger(trigger, data) < 0) return NULL;
                         it++;
                     }
                     else it++;
@@ -347,7 +364,7 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
             top.eval();
         } while(top.commit());
         
-        sim_time++;
+        sim_time += sim_time_precision;
         if (PyErr_CheckSignals()) Py_RETURN_NONE;
     }
     Py_RETURN_NONE;
@@ -369,7 +386,9 @@ static PyMethodDef simulator_methods[] = {
     {"scheduller", scheduller, METH_NOARGS, "add task to scheduller"},
 
     // Utils
-    {"get_sim_time", get_sim_time, METH_NOARGS, "delta step"},
+    {"get_sim_time", get_sim_time, METH_NOARGS, "get simulation time"},
+    {"set_sim_time_precision", set_sim_time_precision, METH_VARARGS, "set sim time precision"},
+    {"get_sim_time_precision", get_sim_time_precision, METH_NOARGS, "get sim time precision"},
 
     {NULL, NULL, 0, NULL}
 };

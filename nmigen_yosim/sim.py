@@ -73,6 +73,17 @@ class Simulator:
     def sim_time(self):
         return self.sim.get_sim_time()
 
+    def set_precision(self, value, units='ps'):
+        mult = 1 if units == 'ps' else \
+               10**3 if units == 'ns' else \
+               10**6 if units == 'us' else \
+               10**9 if units == 's' else \
+               None
+        if not mult:
+            raise ValueError('Invalid unit')
+        return self.sim.set_sim_time_precision(value * mult)
+
+
     def fork(self, coro):
         self.sim.fork(coro)
         return coro

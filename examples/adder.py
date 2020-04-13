@@ -30,7 +30,6 @@ class Adder(Elaboratable):
         m.domain[self.d] += self.r.eq(add.r)
         return m
 
-PERIOD = 2
 def reset_coroutine(rst, clk):
     rst.value = 1
     yield rising_edge(clk)
@@ -56,8 +55,9 @@ if __name__ == '__main__':
     m = Adder(65, 'sync')
     ports = [m.a, m.b, m.r]
     with Simulator(m, platform=None, ports=ports) as (sim, dut):
+        sim.set_precision(1, 'ns')
         start = time.time()
-        clock_coro = clock(dut.clk, PERIOD)
+        clock_coro = clock(dut.clk, 10, 'ns')
         main_coro = main_coroutine(sim, dut)
         sim.run([clock_coro, main_coro])
         elapsed = time.time() - start

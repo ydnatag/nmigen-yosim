@@ -14,11 +14,18 @@ def falling_edge(s):
 def rising_edge(s):
     return TRIGGERS.R_EDGE, s.id
 
-def timer(time):
-    return TRIGGERS.TIMER, time
+def timer(time, units='ps'):
+    mult = 1 if units == 'ps' else \
+           10**3 if units == 'ns' else \
+           10**6 if units == 'us' else \
+           10**9 if units == 's' else \
+           None
+    if not mult:
+        raise ValueError('Invalid unit')
+    return TRIGGERS.TIMER, int(time * mult)
 
-def clock(clk, period=10):
+def clock(clk, period=10, units='ps'):
     period_2 = int(period / 2)
     while True:
-        yield timer(period_2)
+        yield timer(period_2, units=units)
         clk.value = (clk.value + 1) % 2
