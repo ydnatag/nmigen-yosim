@@ -12,7 +12,7 @@ template <size_t Bits> static PyObject * get_current_value(void *signal);
 std::vector<struct task_handler_t> main_tasks;
 std::vector<struct task_handler_t> forked_tasks;
 
-//#define DEBUG
+#define DEBUG
 #ifdef DEBUG
     #define DEBUG_PRINT(...) do{ fprintf( stderr, __VA_ARGS__ ); } while( false )
 #else
@@ -27,110 +27,161 @@ struct signal_handler_t {
     const char * name;
     void * signal;
     int width;
-    void (*setter) (void *signal, PyObject *v);
-    PyObject * (*getter) (void *signal);
+    uint32_t *curr;
+    void (*set) (void *signal, PyObject *v);
+    PyObject * (*get) (void *signal);
 };
 
 struct signal_status_t {
     uint32_t signal;
-    PyLongObject * prev;
+    uint32_t chunks;
+    uint32_t start_time;
+    uint32_t * curr;
+    uint32_t * prev;
 };
 
-struct signal_handler_t sig_handler[] = {
-    {.id = 0, .name = "rst", .width = 1,  .signal = (void*) &top.p_rst, .setter = set_next_value<1>,  .getter = get_current_value<1> },
-    {.id = 1, .name = "clk", .width = 1,  .signal = (void*) &top.p_clk, .setter = set_next_value<1>,  .getter = get_current_value<1> },
-    {.id = 2, .name = "r",   .width = 65, .signal = (void*) &top.p_r,   .setter = set_next_value<65>, .getter = get_current_value<65>},
-    {.id = 3, .name = "b",   .width = 64, .signal = (void*) &top.p_b,   .setter = set_next_value<64>, .getter = get_current_value<64>},
-    {.id = 4, .name = "a",   .width = 64, .signal = (void*) &top.p_a,   .setter = set_next_value<64>, .getter = get_current_value<64>},
+struct signal_handler_t handler_list[] = {
+    {.id = 0, .name = "rst", .width = 1,  .signal = (void*) &top.p_rst, .curr = top.p_rst.curr.data, .set = set_next_value<1>,  .get = get_current_value<1> },
+    {.id = 1, .name = "clk", .width = 1,  .signal = (void*) &top.p_clk, .curr = top.p_clk.curr.data, .set = set_next_value<1>,  .get = get_current_value<1> },
+    {.id = 2, .name = "r",   .width = 65, .signal = (void*) &top.p_r,   .curr = top.p_r.curr.data, .set = set_next_value<65>, .get = get_current_value<65>},
+    {.id = 3, .name = "b",   .width = 64, .signal = (void*) &top.p_b,   .curr = top.p_b.curr.data, .set = set_next_value<64>, .get = get_current_value<64>},
+    {.id = 4, .name = "a",   .width = 64, .signal = (void*) &top.p_a,   .curr = top.p_a.curr.data, .set = set_next_value<64>, .get = get_current_value<64>},
 };
 
-static bool timer_condition(void * data) {
+static bool timer_trigger(void * data) {
     if ((*(long *) data) == sim_time) {
         return true;
     }
     return false;
 }
 
-static bool PyLongEquals(PyLongObject *a, PyLongObject *b){
-    auto size_a = Py_SIZE(a);
-    auto size_b = Py_SIZE(b);
+uint32_t n_of_chunks(uint32_t width) {
+    return (width + 32 - 1) / 32;
+}
 
-    if (size_a != size_b) return false;
+static void copy_chunks(uint32_t *orig, uint32_t *dest, uint32_t chunks) {
+    for (int i=0; i < chunks; i++) {
+        dest[i] = orig[i];
+    }
+}
 
-    if(size_a == 0) return true;
-    for (unsigned int i=0; i<size_a; i++) {
-        if (a->ob_digit[i] != b->ob_digit[i]) return false;
+static bool is_zero(uint32_t *data, uint32_t chunks) {
+    for (int i=0; i < chunks; i++) {
+        if (data[i] != 0) return false;
     }
     return true;
 }
 
-static bool edge_condition(void * data) {
-    signal_status_t * p = (signal_status_t*) data;
-    PyLongObject * current = (PyLongObject *) sig_handler[p->signal].getter(sig_handler[p->signal].signal);
-    if (not PyLongEquals(p->prev, current)) {
-        p->prev = current;
-        return true;
-    }
-    return false;
+static bool other_trigger(void * data) {
+    return true;
 }
 
-static bool redge_condition(void * data) {
+static bool edge_trigger(void * data) {
     signal_status_t * p = (signal_status_t*) data;
-    PyLongObject * current = (PyLongObject *) sig_handler[p->signal].getter(sig_handler[p->signal].signal);
-    if (Py_SIZE(p->prev) == 0 &&  Py_SIZE(current)) {
-        p->prev = current;
-        DEBUG_PRINT("@%d ps: RISING EDGE\n", sim_time);
-        return true;
+    uint32_t * current = handler_list[p->signal].curr;
+    bool rv = false;
+    if (p->start_time != sim_time) {
+        for (int i=0; i < p->chunks; i++) {
+            rv |= p->prev[i] != current[i];
+        }
     }
-    p->prev = current;
-    return false;
+    copy_chunks(current, p->prev, p->chunks);
+#ifdef DEBUG
+    if(rv) DEBUG_PRINT("@%d: EDGE\n", sim_time);
+#endif
+    return rv;
 }
 
-static bool fedge_condition(void * data) {
+static bool redge_trigger(void * data) {
     signal_status_t * p = (signal_status_t*) data;
-    PyLongObject * current = (PyLongObject *) sig_handler[p->signal].getter(sig_handler[p->signal].signal);
-    if (Py_SIZE(p->prev) &&  Py_SIZE(current) == 0) {
-        p->prev = current;
-        return true;
-    }
-    p->prev = current;
-    return false;
+    uint32_t * current = handler_list[p->signal].curr;
+    bool rv = true;
+    if (p->start_time == sim_time) rv = false;
+    if (not is_zero(p->prev, p->chunks)) rv = false;
+    if (is_zero(current, p->chunks)) rv = false;
+    copy_chunks(current, p->prev, p->chunks);
+#ifdef DEBUG
+    if (rv) DEBUG_PRINT("@%d: RISING EDGE\n", sim_time);
+#endif
+    return rv;
 }
+
+static bool fedge_trigger(void * data) {
+    signal_status_t * p = (signal_status_t*) data;
+    uint32_t * current = handler_list[p->signal].curr;
+    bool rv = true;
+    if (p->start_time == sim_time) rv = false;
+    if (is_zero(p->prev, p->chunks)) rv = false;
+    if (not is_zero(current, p->chunks)) rv = false;
+    copy_chunks(current, p->prev, p->chunks);
+#ifdef DEBUG
+    if (rv) DEBUG_PRINT("@%d: RISING EDGE\n", sim_time);
+#endif
+    return rv;
+}
+
+bool (*TRIGGER_LIST[])(void*) = {
+    other_trigger,
+    timer_trigger,
+    edge_trigger,
+    redge_trigger,
+    fedge_trigger
+};
 
 struct task_handler_t {
     PyObject *coro;
-    bool (*condition)(void *);
+    bool (*trigger)(void *);
     void * data;
-    signal_status_t * p;
-    void add_condition(long t, long d) {
-        if (data) {free(data); data = NULL;}
-        switch (t) {
+    long type;
+
+    void alloc_trigger(long trigger_type) {
+#ifdef DEBUG
+        DEBUG_PRINT("@%d: Alloc trigger\n", sim_time);
+#endif
+        if (trigger_type == TIMER) data = (void*) new long;
+        else data = (void*) new signal_status_t;
+    }
+
+    void release_trigger() {
+#ifdef DEBUG
+        DEBUG_PRINT("@%d: Release trigger\n", sim_time);
+#endif
+        free(data);
+        trigger = NULL;
+        data = NULL;
+    }
+
+    void add_trigger(long trigger_type, long value) {
+        signal_status_t * p;
+        uint32_t chunks;
+
+#ifdef DEBUG
+        DEBUG_PRINT("@%d: Adding trigger\n", sim_time);
+#endif
+
+        if (trigger && type > TIMER) delete ((signal_status_t*)data)->prev;
+        if (trigger && type != trigger_type) release_trigger();
+        if (trigger == NULL) alloc_trigger(trigger_type);
+
+        type = trigger_type;
+        switch (type) {
             case TIMER:
-                data = new long{sim_time + d};
-                condition = timer_condition;
+                *((long*) data) = sim_time + value;
                 break;
             case EDGE:
-                p =  new signal_status_t;
-                data = p;
-                p->signal = d;
-                p->prev = (PyLongObject*) sig_handler[d].getter(sig_handler[d].signal);
-                condition = edge_condition;
-                break;
             case R_EDGE:
-                p =  new signal_status_t;
-                data = p;
-                p->signal = d;
-                p->prev =  (PyLongObject*) sig_handler[d].getter(sig_handler[d].signal);
-                condition = redge_condition;
-                break;
             case F_EDGE:
-                p =  new signal_status_t;
-                data = p;
-                p->signal = d;
-                p->prev =  (PyLongObject*) sig_handler[d].getter(sig_handler[d].signal);
-                condition = fedge_condition;
+                p = (signal_status_t*) data;
+                p->signal = value;
+                p->chunks = n_of_chunks(handler_list[value].width);
+                p->start_time = sim_time;
+                p->curr = handler_list[value].curr;
+                p->prev = new uint32_t[p->chunks];
+                for (int i = 0; i < p->chunks; i++) p->prev[i] = p->curr[i];
+                DEBUG_PRINT("@%d: Trigger added\n", sim_time);
                 break;
         }
+        trigger = TRIGGER_LIST[type];
     }
 };
 
@@ -168,13 +219,12 @@ static PyObject * get_current_value(void *signal) {
     uint64_t data = 0;
     uint32_t b = 0;
     const uint32_t chunks = (Bits + 32 - 1) / 32;
-    const uint32_t max_ob_size = (Bits + 30 - 1) / 30 + 1;
+    const uint32_t max_ob_size = (Bits + 30 - 1) / 30 + 2;
     uint32_t  ob_size = 0;
     unsigned int j = 0;
     uint32_t ob_digit[max_ob_size] = {};
 
     for (unsigned int i = 0; i < chunks; i++) {
-        if (signal != &top.p_clk ) DEBUG_PRINT("p->data[%d] = %u\n", i, p->data[i]); 
         data |= ((uint64_t) p->data[i]) << b;
         b += 32;
         while(b >= 30) {
@@ -198,20 +248,20 @@ static PyObject * get_current_value(void *signal) {
 static PyObject* get_signal_name(PyObject *self, PyObject *args) {
     uint32_t id;
     PyArg_ParseTuple(args,"i", &id);
-    return Py_BuildValue("s", sig_handler[id].name);
+    return Py_BuildValue("s", handler_list[id].name);
 }
 
 static PyObject* get_signal_width(PyObject *self, PyObject *args) {
     uint32_t id;
     PyArg_ParseTuple(args,"i", &id);
-    return Py_BuildValue("s", sig_handler[id].width);
+    return Py_BuildValue("s", handler_list[id].width);
 }
 
 static PyObject* set_by_id(PyObject *self, PyObject *args) {
     uint32_t id;
     PyObject * v;
     PyArg_ParseTuple(args,"iO", &id, &v);
-    sig_handler[id].setter(sig_handler[id].signal, v);
+    handler_list[id].set(handler_list[id].signal, v);
     Py_RETURN_NONE;
 }
 
@@ -225,8 +275,7 @@ static void step() {
 static PyObject* get_by_id(PyObject *self, PyObject *args) {
     uint32_t id;
     PyArg_ParseTuple(args,"i", &id);
-    DEBUG_PRINT("get_by_id: %s\n", sig_handler[id].name); 
-    return sig_handler[id].getter(sig_handler[id].signal);
+    return handler_list[id].get(handler_list[id].signal);
 }
 
 static PyObject* pystep(PyObject *self, PyObject *args) {
@@ -235,7 +284,7 @@ static PyObject* pystep(PyObject *self, PyObject *args) {
 }
 
 static PyObject* n_of_signals(PyObject *self, PyObject *args) {
-    return Py_BuildValue("i", sizeof(sig_handler)/sizeof(struct signal_handler_t));
+    return Py_BuildValue("i", sizeof(handler_list)/sizeof(struct signal_handler_t));
 }
 
 static PyObject* get_sim_time(PyObject *self, PyObject *args) {
@@ -245,7 +294,7 @@ static PyObject* get_sim_time(PyObject *self, PyObject *args) {
 static PyObject* add_task(PyObject *self, PyObject *args) {
     PyObject * gen;
     PyArg_ParseTuple(args,"O", &gen);
-    main_tasks.push_back(task_handler_t{gen, NULL, NULL});
+    main_tasks.push_back(task_handler_t{gen, NULL, NULL, 0});
     Py_RETURN_NONE;
 }
 
@@ -265,7 +314,7 @@ static PyObject* fork(PyObject *self, PyObject *args) {
 
     task_handler_t task = task_handler_t{coro, NULL, NULL};
 
-    task.add_condition(trigger, data);
+    task.add_trigger(trigger, data);
     forked_tasks.push_back(task);
     Py_RETURN_NONE;
 }
@@ -277,21 +326,21 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
     while (true) {
         do {
             for (auto it=main_tasks.begin(); it != main_tasks.end();) {
-                if (not it->condition or it->condition(it->data)) {
+                if (not it->trigger or it->trigger(it->data)) {
                     ret = PyObject_CallMethod(it->coro, "__next__", "");
                     if (PyErr_ExceptionMatches(PyExc_StopIteration)) Py_RETURN_NONE;
                     error = PyErr_Occurred();
                     if (error) Py_RETURN_NONE;
                     trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
                     data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
-                    it->add_condition(trigger, data);
+                    it->add_trigger(trigger, data);
                 }
                 it++;
             }
             
             if (forked_tasks.size() != 0) {
                 for (auto it=forked_tasks.begin(); it != forked_tasks.end();) {
-                    if (not it->condition or it->condition(it->data)) {
+                    if (not it->trigger or it->trigger(it->data)) {
                         ret = PyObject_CallMethod(it->coro, "__next__", "");
                         if (PyErr_ExceptionMatches(PyExc_StopIteration)) {
                             if (it->data) {free(it->data); it->data = NULL;}
@@ -302,15 +351,15 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
                         if (error) Py_RETURN_NONE;
                         trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
                         data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
-                        it->add_condition(trigger, data);
+                        it->add_trigger(trigger, data);
                         it++;
                     }
                     else it++;
                 }
             }
-
             top.eval();
         } while(top.commit());
+        
         sim_time++;
         if (PyErr_CheckSignals()) Py_RETURN_NONE;
     }
