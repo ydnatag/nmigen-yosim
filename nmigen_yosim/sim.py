@@ -11,7 +11,7 @@ import tempfile
 
 
 class Simulator:
-    def __init__(self, design, platform=None, ports=None, debug=False):
+    def __init__(self, design, platform=None, ports=None, debug=False, vcd=False):
         fragment = Fragment.get(design, None)
         output = rtlil.convert(fragment, name='top', ports=ports)
 
@@ -23,6 +23,7 @@ class Simulator:
         wrapper_path = os.path.dirname(os.path.realpath(__file__))
         self.wrapper_file = wrapper_path + '/wrapper.cc.j2'
         self.debug = debug
+        self.vcd = vcd
 
         with open(self.il_file, 'w') as f:
             f.write(output)
@@ -50,11 +51,13 @@ class Simulator:
     def build(self):
         python_cflags = subprocess.check_output(['python3-config', '--includes'], encoding="utf-8")
         debug_cflags = '-DDEBUG' if self.debug else ''
+        vcd_cflags = '-DVCD_DUMP' if self.vcd else ''
         subprocess.run(['clang++',
                         '-I/usr/local/share/yosys/include/backends/cxxrtl/',
                         '-shared', '-fPIC', '-O3',
                         *python_cflags.split(' '),
                         debug_cflags,
+                        vcd_cflags,
                         '-o', f'{self.so_file}',
                         f'{self.cpp_file}']).check_returncode()
 

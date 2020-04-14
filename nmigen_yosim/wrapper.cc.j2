@@ -23,6 +23,7 @@ std::vector<struct task_handler_t> forked_tasks;
 cxxrtl_design::p_top top;
 uint32_t sim_time = 0;
 uint32_t sim_time_precision = 1;
+PyObject *vcd_callback = NULL;
 
 struct signal_handler_t {
     const char * name;
@@ -157,9 +158,6 @@ struct task_handler_t {
     }
 
     void release_trigger() {
-#ifdef DEBUG
-        DEBUG_PRINT("@%d: Release trigger\n", sim_time);
-#endif
         free(data);
         trigger = NULL;
         data = NULL;
@@ -168,10 +166,6 @@ struct task_handler_t {
     int add_trigger(long trigger_type, long value) {
         signal_status_t * p;
         uint32_t chunks;
-
-#ifdef DEBUG
-        DEBUG_PRINT("@%d: Adding trigger\n", sim_time);
-#endif
 
         if (trigger && type > TIMER) delete ((signal_status_t*)data)->prev;
         if (trigger && type != trigger_type) release_trigger();
@@ -381,10 +375,22 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
             }
             top.eval();
         } while(top.commit());
+
+#ifdef VCD_DUMP
+        if(vcd_callback) {
+            DEBUG_PRINT("VCD_DUMP: Callback\n");
+            PyObject_CallMethod(vcd_callback, "__next__", "");
+        }
+#endif
         
         sim_time += sim_time_precision;
         if (PyErr_CheckSignals()) Py_RETURN_NONE;
     }
+    Py_RETURN_NONE;
+}
+
+static PyObject* set_vcd_callback(PyObject *self, PyObject *args) {
+    PyArg_ParseTuple(args,"O", &vcd_callback);
     Py_RETURN_NONE;
 }
 
@@ -403,6 +409,7 @@ static PyMethodDef simulator_methods[] = {
     {"fork", fork, METH_VARARGS, "add task to scheduller"},
     {"add_task", add_task, METH_VARARGS, "add task to scheduller"},
     {"scheduller", scheduller, METH_NOARGS, "add task to scheduller"},
+    {"set_vcd_callback", set_vcd_callback, METH_VARARGS, "set vcd callback"},
 
     // Utils
     {"get_sim_time", get_sim_time, METH_NOARGS, "get simulation time"},
