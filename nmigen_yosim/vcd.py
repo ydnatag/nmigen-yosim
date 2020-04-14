@@ -3,7 +3,7 @@ from vcd import VCDWriter
 # Following code is from nMigen.
 # Edited for compatibility
 class VCDWaveformWriter:
-    def __init__(self, simulation, signals, *, vcd_file):
+    def __init__(self, simulation, *, vcd_file):
         vcd_file = open(vcd_file, "wt")
         self.sim = simulation
 
@@ -15,6 +15,13 @@ class VCDWaveformWriter:
         if self.vcd_writer is None:
             return
 
+    def update(self):
+        timestamp = self.sim.sim_time
+        for vcd_var, signal in self.vcd_vars:
+            self.vcd_writer.change(vcd_var, timestamp, signal.value)
+
+    def callback(self, signals):
+        self.vcd_vars = []
         for signal in signals:
             hierarchy = signal.name.split('.')
             var_type = "wire"
@@ -28,12 +35,6 @@ class VCDWaveformWriter:
                 var_type=var_type, size=var_size, init=var_init)
             self.vcd_vars.append((vcd_var, signal))
 
-    def update(self):
-        timestamp = self.sim.sim_time
-        for vcd_var, signal in self.vcd_vars:
-            self.vcd_writer.change(vcd_var, timestamp, signal.value)
-
-    def callback(self, signals):
         while True:
             self.update()
             yield

@@ -30,6 +30,16 @@ class Module():
         else:
             mod = self
         return mod
+    def get_signals(self, recursive=False):
+        signals = []
+        for name in dir(self):
+            attr = getattr(self, name)
+            if isinstance(attr, Signal):
+                signals.append(attr)
+            elif isinstance(attr, Module):
+                if recursive:
+                    signals.extend(attr.get_signals())
+        return signals
 
 class Dut(Module):
     def __init__(self, simulation):
