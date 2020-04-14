@@ -1,9 +1,12 @@
 class TRIGGERS:
-    OTHER = 0
+    DELTA = 0
     TIMER = 1
     EDGE = 2
     R_EDGE = 3
     F_EDGE = 4
+
+def delta():
+    return TRIGGERS.DELTA, 0
 
 def edge(s):
     return TRIGGERS.EDGE, s.id

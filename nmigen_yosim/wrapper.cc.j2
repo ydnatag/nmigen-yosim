@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <stdio.h>
 
-enum TRIGGERS {OTHER=0, TIMER, EDGE, R_EDGE, F_EDGE};
+enum TRIGGERS {DELTA=0, TIMER, EDGE, R_EDGE, F_EDGE};
 
 template <size_t Bits> static void set_next_value(void *signal, PyObject *v);
 template <size_t Bits> static PyObject * get_current_value(void *signal);
@@ -53,6 +53,9 @@ struct signal_handler_t handler_list[] = {
 
 static bool timer_trigger(void * data) {
     if ((*(long *) data) == sim_time) {
+#ifdef DEBUG
+        DEBUG_PRINT("@%d: TIMER\n", sim_time);
+#endif
         return true;
     }
     return false;
@@ -71,8 +74,14 @@ static bool is_zero(uint32_t *data, uint32_t chunks) {
     return true;
 }
 
-static bool other_trigger(void * data) {
-    return true;
+static bool delta_trigger(void * data) {
+    if ((*(long *) data) < sim_time) {
+#ifdef DEBUG
+        DEBUG_PRINT("@%d: DELTA\n", sim_time);
+#endif
+        return true;
+    }
+    return false;
 }
 
 static bool edge_trigger(void * data) {
@@ -120,7 +129,7 @@ static bool fedge_trigger(void * data) {
 }
 
 bool (*TRIGGER_LIST[])(void*) = {
-    other_trigger,
+    delta_trigger,
     timer_trigger,
     edge_trigger,
     redge_trigger,
@@ -134,11 +143,17 @@ struct task_handler_t {
     long type;
 
     void alloc_trigger(long trigger_type) {
-#ifdef DEBUG
-        DEBUG_PRINT("@%d: Alloc trigger\n", sim_time);
-#endif
-        if (trigger_type == TIMER) data = (void*) new long;
-        else data = (void*) new signal_status_t;
+        switch(trigger_type) {
+            case DELTA:
+            case TIMER:
+                data = (void*) new long;
+                break;
+            case EDGE:
+            case R_EDGE:
+            case F_EDGE:
+                data = (void*) new signal_status_t;
+                break;
+        }
     }
 
     void release_trigger() {
@@ -164,6 +179,9 @@ struct task_handler_t {
 
         type = trigger_type;
         switch (type) {
+            case DELTA:
+                *((long*) data) = sim_time;
+                break;
             case TIMER:
                 if (value % sim_time_precision > 0) {
                     PyErr_SetString(PyExc_ValueError, "Invalid time precision");
