@@ -12,7 +12,7 @@ import tempfile
 
 
 class Simulator:
-    def __init__(self, design, platform=None, ports=None, vcd_file=False, debug=False):
+    def __init__(self, design, platform=None, ports=None, vcd_file=False, precision=(1, 'ps'), debug=False):
         fragment = Fragment.get(design, None)
         output = rtlil.convert(fragment, name='top', ports=ports)
 
@@ -40,6 +40,8 @@ class Simulator:
         if self.vcd_file:
             self.vcd_writer = VCDWaveformWriter(simulation=self, vcd_file='./dump.vcd')
             self.vcd_signals = []
+
+        self.set_precision(*precision)
 
     def cxxrtl(self):
         subprocess.run(f'yosys -q {self.il_file} -o {self.cpp_file}'.split(' ')
