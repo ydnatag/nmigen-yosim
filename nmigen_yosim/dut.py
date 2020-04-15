@@ -13,6 +13,9 @@ class Signal():
     def value(self, value):
         return self.sim.set_by_id(self.id, value)
 
+    def __len__(self):
+        return self.width
+
     def __str__(self):
         return str(self.value)
 
