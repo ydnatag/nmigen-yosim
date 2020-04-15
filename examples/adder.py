@@ -37,40 +37,38 @@ def reset_coroutine(rst, clk):
     rst.value = 0
     yield rising_edge(clk)
 
-def main_coroutine(sim, dut):
-    for j in range(8, 65):
-        yield from reset_coroutine(dut.rst, dut.clk)
-        for i in range(1000):
-            a = random.randint(0, 2**j-1)
-            b = random.randint(0, 2**j-1)
-            dut.a.value = a
-            dut.b.value = b
-            yield rising_edge(dut.clk)
-            yield rising_edge(dut.clk)
-            assert a == dut.a.value, f'{a} == {dut.a.value}'
-            assert b == dut.b.value, f'{b} == {dut.b.value}'
-            assert a + b == dut.r.value, (
-                f'@{sim.sim_time} ps: {a} + {b} == {dut.r.value}')
+def main_coroutine(dut):
+    yield from reset_coroutine(dut.rst, dut.clk)
+    for i in range(1000):
+        dut.a.value = a = random.getrandbits(len(dut.a))
+        dut.b.value = b = random.getrandbits(len(dut.b))
+        yield rising_edge(dut.clk)
+        yield rising_edge(dut.clk)
+        assert a == dut.a.value, f'{a} == {dut.a.value}'
+        assert b == dut.b.value, f'{b} == {dut.b.value}'
+        assert a + b == dut.r.value, (
+            f'@{sim.sim_time} ps: {a} + {b} == {dut.r.value}')
 
 def run_sim(vcd):
-    m = Adder(65, 'sync')
-    sim_config = {
-        'platform': None,
-        'ports': [m.a, m.b, m.r],
-        'vcd_file': './dump.vcd' if vcd else None,
-        'precision': (5, 'ns')}
+    for w in (32, 65, 120):
+        m = Adder(w, 'sync')
+        sim_config = {
+            'platform': None,
+            'ports': [m.a, m.b, m.r],
+            'vcd_file': f'./dump_{w}.vcd' if vcd else None,
+            'precision': (5, 'ns')}
 
-    start = time.time()
-    with Simulator(m, **sim_config) as (sim, dut):
-        clock_coro = clock(dut.clk, 10, 'ns')
-        main_coro = main_coroutine(sim, dut)
-        sim.run([clock_coro, main_coro])
-    elapsed = time.time() - start
+        with Simulator(m, **sim_config) as (sim, dut):
+            start = time.time()
+            clock_coro = clock(dut.clk, 10, 'ns')
+            main_coro = main_coroutine(dut)
+            sim.run([clock_coro, main_coro])
+            elapsed = time.time() - start
 
-    print(f'\nResults (vcd={vcd}):')
-    print(f'sim time: {sim.sim_time / 1000} ns')
-    print(f'real time: {elapsed} s')
-    print(f'simtime / realtime: {sim.sim_time / 1000 / elapsed} ns/s')
+        print(f'\nResults width={w} vcd={vcd}:')
+        print(f'sim time: {sim.sim_time / 1000} ns')
+        print(f'real time: {elapsed} s')
+        print(f'simtime / realtime: {sim.sim_time / 1000 / elapsed} ns/s')
 
 if __name__ == '__main__':
     run_sim(vcd=True)
