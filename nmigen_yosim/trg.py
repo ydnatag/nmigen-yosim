@@ -4,6 +4,7 @@ class TRIGGERS:
     EDGE = 2
     R_EDGE = 3
     F_EDGE = 4
+    JOIN = 5
 
 def delta():
     return TRIGGERS.DELTA, 0
@@ -26,3 +27,6 @@ def timer(time, units='ps'):
     if not mult:
         raise ValueError('Invalid unit')
     return TRIGGERS.TIMER, int(time * mult)
+
+def join(task):
+    return TRIGGERS.JOIN, task.id

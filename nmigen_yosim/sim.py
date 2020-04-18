@@ -10,6 +10,10 @@ import subprocess
 import sys
 import tempfile
 
+class Task:
+    def __init__(self, coro, task_id):
+        self.id = task_id
+        self.coro = coro
 
 class Simulator:
     def __init__(self, design, platform=None, ports=None, vcd_file=False, precision=(1, 'ps'), debug=False):
@@ -69,6 +73,7 @@ class Simulator:
                         f'{self.cpp_file}']).check_returncode()
 
     def run(self, coros):
+        tasks = []
         if self.vcd_file:
             if not self.vcd_signals:
                 self.vcd_signals = self.dut.get_signals(recursive=True)
@@ -76,6 +81,7 @@ class Simulator:
             self.sim.set_vcd_callback(self.vcd_callback)
 
         for coro in coros:
+            tasks.append(Task(coro, 0))
             self.sim.add_task(coro)
         try:
             try:
@@ -100,12 +106,8 @@ class Simulator:
         return self.sim.set_sim_time_precision(value * mult)
 
     def fork(self, coro):
-        self.sim.fork(coro)
-        return coro
-
-    def join(self, coro):
-        while coro in self.main_coros or coro in self.child_coros:
-            yield Triggers.OTHER, 0
+        task_id = self.sim.fork(coro)
+        return Task(coro, task_id)
 
     def __enter__(self):
         return self, self.dut

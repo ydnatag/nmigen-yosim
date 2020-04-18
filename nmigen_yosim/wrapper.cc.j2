@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <stdio.h>
 
-enum TRIGGERS {DELTA=0, TIMER, EDGE, R_EDGE, F_EDGE};
+enum TRIGGERS {DELTA=0, TIMER, EDGE, R_EDGE, F_EDGE, JOIN};
 
 template <size_t Bits> static void set_next_value(void *signal, PyObject *v);
 template <size_t Bits> static PyObject * get_current_value(void *signal);
@@ -24,6 +24,7 @@ cxxrtl_design::p_top top;
 uint32_t sim_time = 0;
 uint32_t sim_time_precision = 1;
 PyObject *vcd_callback = NULL;
+int task_id;
 
 struct signal_handler_t {
     const char * name;
@@ -31,6 +32,11 @@ struct signal_handler_t {
     uint32_t chunks;
     uint32_t *curr;
     uint32_t *next;
+};
+
+struct join_handler_t {
+    int id;
+    bool finished;
 };
 
 struct signal_status_t {
@@ -129,15 +135,26 @@ static bool fedge_trigger(void * data) {
     return rv;
 }
 
+static bool join_trigger(void * data) {
+    join_handler_t * p = (join_handler_t*) data;
+    bool rv = p->finished;
+#ifdef DEBUG
+    if (rv) DEBUG_PRINT("@%d: JOIN\n", sim_time);
+#endif
+    return rv;
+}
+
 bool (*TRIGGER_LIST[])(void*) = {
     delta_trigger,
     timer_trigger,
     edge_trigger,
     redge_trigger,
-    fedge_trigger
+    fedge_trigger,
+    join_trigger
 };
 
 struct task_handler_t {
+    int id;
     PyObject *coro;
     bool (*trigger)(void *);
     void * data;
@@ -153,6 +170,9 @@ struct task_handler_t {
             case R_EDGE:
             case F_EDGE:
                 data = (void*) new signal_status_t;
+                break;
+            case JOIN:
+                data = (void*) new join_handler_t;
                 break;
         }
     }
@@ -193,6 +213,10 @@ struct task_handler_t {
                 p->curr = handler_list[value].curr;
                 p->prev = new uint32_t[p->chunks];
                 for (int i = 0; i < p->chunks; i++) p->prev[i] = p->curr[i];
+                break;
+            case JOIN:
+                ((join_handler_t*) data)->id = value;
+                ((join_handler_t*) data)->finished = 0;
                 break;
         }
         trigger = TRIGGER_LIST[type];
@@ -310,7 +334,7 @@ static PyObject* set_sim_time_precision(PyObject *self, PyObject *args) {
 static PyObject* add_task(PyObject *self, PyObject *args) {
     PyObject * gen;
     PyArg_ParseTuple(args,"O", &gen);
-    main_tasks.push_back(task_handler_t{gen, NULL, NULL, 0});
+    main_tasks.push_back(task_handler_t{task_id++, gen, NULL, NULL, 0});
     Py_RETURN_NONE;
 }
 
@@ -328,21 +352,44 @@ static PyObject* fork(PyObject *self, PyObject *args) {
     auto trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
     auto data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
 
-    task_handler_t task = task_handler_t{coro, NULL, NULL};
+    task_handler_t task = task_handler_t{task_id, coro, NULL, NULL};
 
     if (task.add_trigger(trigger, data) < 0) return NULL;
     forked_tasks.push_back(task);
-    Py_RETURN_NONE;
+    return Py_BuildValue("i", task_id++);
+}
+
+static void emit_task_ending(int id) {
+    join_handler_t *p;
+    for (auto it=main_tasks.begin(); it != main_tasks.end();) {
+        if (it->type == JOIN) {
+            p = (join_handler_t *) it->data;
+            if (id == p->id) {
+                p->finished = true;
+            }
+        }
+        it++;
+    }
+    for (auto it=forked_tasks.begin(); it != forked_tasks.end();) {
+        if (it->type == JOIN) {
+            p = (join_handler_t *) it->data;
+            if (id == p->id) p->finished = true;
+        }
+        it++;
+    }
 }
 
 static PyObject* scheduller(PyObject *self, PyObject *args) {
     PyObject *ret, *error;
     long trigger, data;
+    bool triggered = false;
     
     while (true) {
         do {
+            triggered = false;
             for (auto it=main_tasks.begin(); it != main_tasks.end();) {
                 if (not it->trigger or it->trigger(it->data)) {
+                    triggered = true;
                     ret = PyObject_CallMethod(it->coro, "__next__", "");
                     if (PyErr_ExceptionMatches(PyExc_StopIteration)) Py_RETURN_NONE;
                     error = PyErr_Occurred();
@@ -357,24 +404,27 @@ static PyObject* scheduller(PyObject *self, PyObject *args) {
             if (forked_tasks.size() != 0) {
                 for (auto it=forked_tasks.begin(); it != forked_tasks.end();) {
                     if (not it->trigger or it->trigger(it->data)) {
+                        triggered = true;
                         ret = PyObject_CallMethod(it->coro, "__next__", "");
                         if (PyErr_ExceptionMatches(PyExc_StopIteration)) {
+                            emit_task_ending(it->id);
                             if (it->data) {free(it->data); it->data = NULL;}
                             forked_tasks.erase(it);
                             PyErr_Clear();
                         }
-                        error = PyErr_Occurred();
-                        if (error) Py_RETURN_NONE;
-                        trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
-                        data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
-                        if (it->add_trigger(trigger, data) < 0) return NULL;
-                        it++;
-                    }
-                    else it++;
+                        else {
+                            error = PyErr_Occurred();
+                            if (error) Py_RETURN_NONE;
+                            trigger = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0));
+                            data = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
+                            if (it->add_trigger(trigger, data) < 0) return NULL;
+                            it++;
+                        }
+                    } else it++;
                 }
             }
             top.eval();
-        } while(top.commit());
+        } while(triggered || top.commit());
 
 #ifdef VCD_DUMP
         if(vcd_callback) {
